@@ -8,6 +8,9 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from pages.base import BasePage
 
+DASHBOARD_PATH = "/employee-dashboard"
+_DASHBOARD_PATTERN = re.compile(r"/employee-dashboard")
+
 
 class LoginPage(BasePage):
     USERNAME_INPUT = "#username"
@@ -17,6 +20,10 @@ class LoginPage(BasePage):
     @property
     def login_url(self) -> str:
         return f"{self.base_url}/login"
+
+    @property
+    def dashboard_url(self) -> str:
+        return f"{self.base_url}{DASHBOARD_PATH}"
 
     async def open(self) -> None:
         """Navigate to the login page and wait for the form."""
@@ -39,11 +46,24 @@ class LoginPage(BasePage):
         await self.fill_credentials(username, password)
         await self.submit()
 
+    async def wait_for_dashboard(self, timeout_ms: int = 30_000) -> str:
+        """Wait until the browser lands on the employee dashboard."""
+        try:
+            await self.page.wait_for_url(
+                lambda url: bool(_DASHBOARD_PATTERN.search(url)),
+                timeout=timeout_ms,
+            )
+        except PlaywrightTimeoutError as exc:
+            raise RuntimeError(
+                "Login did not redirect to the employee dashboard within the timeout. "
+                "Check credentials or look for an error message on the page."
+            ) from exc
+
+        await self.human.think(600, 1400)
+        return self.page.url
+
     async def wait_for_post_login(self, timeout_ms: int = 30_000) -> str:
-        """
-        Wait until navigation away from the login page completes.
-        Returns the final URL.
-        """
+        """Wait until navigation away from the login page completes."""
         login_pattern = re.compile(r"/login/?(\?|$)")
 
         try:

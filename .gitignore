@@ -8,6 +8,7 @@ venv/
 env/
 .playwright/
 downloads/
+.session/
 screenshots/
 *.log
 .pytest_cache/

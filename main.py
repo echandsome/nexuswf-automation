@@ -7,9 +7,9 @@ import asyncio
 import logging
 import sys
 
+from browser.auth import ensure_logged_in
 from browser.session import open_session
 from config.settings import Settings
-from pages.login import LoginPage
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,13 +21,7 @@ logger = logging.getLogger(__name__)
 
 async def run_login(settings: Settings, *, keep_open_seconds: int = 0) -> str:
     async with open_session(settings) as session:
-        login_page = LoginPage(session.page, session.human, settings.base_url)
-
-        logger.info("Opening login page at %s", login_page.login_url)
-        await login_page.login(settings.username, settings.password)
-
-        final_url = await login_page.wait_for_post_login()
-        logger.info("Login succeeded — landed on %s", final_url)
+        final_url = await ensure_logged_in(session, settings)
 
         if keep_open_seconds > 0:
             logger.info("Keeping browser open for %d seconds", keep_open_seconds)

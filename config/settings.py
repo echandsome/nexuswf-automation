@@ -19,6 +19,8 @@ class Settings:
     headless: bool
     browser_channel: str | None
     downloads_dir: Path
+    session_dir: Path
+    storage_state_path: Path
     default_timeout_ms: int
 
     @classmethod
@@ -41,6 +43,9 @@ class Settings:
         downloads_dir = _PROJECT_ROOT / "downloads"
         downloads_dir.mkdir(exist_ok=True)
 
+        session_dir = _PROJECT_ROOT / ".session"
+        session_dir.mkdir(exist_ok=True)
+
         return cls(
             username=username,
             password=password,
@@ -48,5 +53,7 @@ class Settings:
             headless=headless,
             browser_channel=channel,
             downloads_dir=downloads_dir,
+            session_dir=session_dir,
+            storage_state_path=session_dir / "storage.json",
             default_timeout_ms=30_000,
         )
