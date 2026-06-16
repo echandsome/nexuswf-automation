@@ -16,6 +16,9 @@ class Settings:
     username: str
     password: str
     base_url: str
+    ilsl_portal_url: str
+    ilsl_username: str
+    ilsl_password: str
     headless: bool
     browser_channel: str | None
     downloads_dir: Path
@@ -30,6 +33,12 @@ class Settings:
         username = os.getenv("NEXUSWF_USERNAME", "").strip()
         password = os.getenv("NEXUSWF_PASSWORD", "").strip()
         base_url = os.getenv("NEXUSWF_BASE_URL", "https://app.nexuswf.com").rstrip("/")
+        ilsl_portal_url = os.getenv(
+            "ILSL_PORTAL_URL",
+            "https://portal.ilsl.co.uk/legal/files/records/index",
+        ).rstrip("/")
+        ilsl_username = os.getenv("ILSL_USERNAME", "").strip() or username
+        ilsl_password = os.getenv("ILSL_PASSWORD", "").strip() or password
 
         if not username or not password:
             raise ValueError(
@@ -50,6 +59,9 @@ class Settings:
             username=username,
             password=password,
             base_url=base_url,
+            ilsl_portal_url=ilsl_portal_url,
+            ilsl_username=ilsl_username,
+            ilsl_password=ilsl_password,
             headless=headless,
             browser_channel=channel,
             downloads_dir=downloads_dir,
