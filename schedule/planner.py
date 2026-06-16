@@ -1,0 +1,169 @@
+"""Distribute target duration across rows, breaks, and idle time."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import random
+import time
+from dataclasses import dataclass
+
+from data.records import CaseRecord
+from human.actor import HumanActor
+
+logger = logging.getLogger(__name__)
+
+# Fixed per-action timings for copy-paste entry at pace 1.0 (seconds).
+_ENTRY_START_THINK = 1.3
+_BETWEEN_FIELD_PAUSE = 0.45
+_PASTE_FIELD_SECONDS = 1.8
+_SELECT_FIELD_SECONDS = 2.0
+_PRE_SUBMIT_SECONDS = 2.0
+_MIN_PACE = 0.30
+_MAX_PACE = 1.15
+
+
+@dataclass(frozen=True)
+class PlannedBreak:
+    after_index: int
+    duration_seconds: float
+
+
+def plan_breaks(total_records: int, target_seconds: float, seed: int) -> list[PlannedBreak]:
+    """Reserve a slice of the target duration for a handful of spread-out breaks."""
+    rng = random.Random(seed)
+    count = rng.randint(3, 5)
+    break_total = target_seconds * rng.uniform(0.10, 0.15)
+    each = break_total / count
+    points = sorted(
+        {max(0, min(total_records - 1, int(total_records * (i + 1) / (count + 1)) - 1)) for i in range(count)}
+    )
+    return [
+        PlannedBreak(
+            after_index=point,
+            duration_seconds=each * rng.uniform(0.85, 1.15),
+        )
+        for point in points
+    ]
+
+
+def schedule_seed(task_file: str, target_seconds: float) -> int:
+    return hash((task_file, round(target_seconds, 3))) & 0xFFFFFFFF
+
+
+def estimate_entry_seconds(record: CaseRecord, file_executor: str) -> float:
+    """Estimate copy-paste entry duration at pace 1.0 (flat per field, not per character)."""
+    text_fields = 5  # case_ref, client, jurisdiction, executor, summary
+    if record.record_source:
+        text_fields += 1
+    _ = file_executor  # same paste cost regardless of value length
+
+    between_fields = text_fields + 3  # pauses between each step
+    return (
+        _ENTRY_START_THINK
+        + text_fields * _PASTE_FIELD_SECONDS
+        + 3 * _SELECT_FIELD_SECONDS
+        + between_fields * _BETWEEN_FIELD_PAUSE
+        + _PRE_SUBMIT_SECONDS
+    )
+
+
+class EntryScheduler:
+    """Allocate wall-clock slots so row work plus planned breaks match the target."""
+
+    def __init__(
+        self,
+        target_duration_seconds: float,
+        total_records: int,
+        completed_count: int,
+        elapsed_seconds: float,
+        planned_breaks: list[PlannedBreak],
+    ) -> None:
+        self.target_duration_seconds = target_duration_seconds
+        self.total_records = total_records
+        self.completed_count = completed_count
+        self.elapsed_seconds = elapsed_seconds
+        self.planned_breaks = planned_breaks
+
+    @property
+    def remaining_records(self) -> int:
+        return max(0, self.total_records - self.completed_count)
+
+    @property
+    def remaining_seconds(self) -> float:
+        return max(0.0, self.target_duration_seconds - self.elapsed_seconds)
+
+    def _future_break_seconds(self) -> float:
+        return sum(
+            break_.duration_seconds
+            for break_ in self.planned_breaks
+            if break_.after_index >= self.completed_count
+        )
+
+    def next_slot_seconds(self) -> float:
+        """Seconds allocated to the next record, excluding upcoming planned breaks."""
+        if self.remaining_records <= 0:
+            return 0.0
+
+        work_remaining = self.remaining_seconds - self._future_break_seconds()
+        work_remaining = max(0.0, work_remaining)
+        base = work_remaining / self.remaining_records
+        return base * random.uniform(0.94, 1.06)
+
+    def entry_budget(self, slot_seconds: float) -> float:
+        """Portion of the row slot spent on active form entry (rest is idle within slot)."""
+        return slot_seconds * random.uniform(0.78, 0.88)
+
+    def compute_pace(self, record: CaseRecord, file_executor: str, entry_budget: float) -> float:
+        """Scale human delays so natural entry fits the allotted entry budget."""
+        natural = estimate_entry_seconds(record, file_executor)
+        if natural <= 0:
+            return 1.0
+        pace = entry_budget / natural
+        return max(_MIN_PACE, min(_MAX_PACE, pace))
+
+    def break_after(self, completed_index: int) -> PlannedBreak | None:
+        for break_ in self.planned_breaks:
+            if break_.after_index == completed_index:
+                return break_
+        return None
+
+    def should_simulate_interruption(self) -> bool:
+        return self.completed_count > 3 and random.random() < 0.03
+
+    async def fill_to_slot(self, human: HumanActor, row_start: float, slot_seconds: float) -> float:
+        """Idle until the row slot elapses. Returns extra seconds waited."""
+        padding_start = time.monotonic()
+
+        while True:
+            elapsed = time.monotonic() - row_start
+            remaining = slot_seconds - elapsed
+            if remaining <= 0.2:
+                break
+
+            if remaining > 6:
+                chunk = min(remaining - 0.3, random.uniform(2.0, 6.0))
+                if random.random() < 0.2:
+                    await human.scroll(direction=random.choice(["down", "up"]))
+                else:
+                    await human.think(chunk * 900, chunk * 1000)
+            else:
+                await asyncio.sleep(remaining)
+
+        return time.monotonic() - padding_start
+
+    async def take_break(self, human: HumanActor, duration_seconds: float) -> None:
+        logger.info("Taking a scheduled break (%.0f seconds)", duration_seconds)
+        remaining = duration_seconds
+        while remaining > 1:
+            chunk = min(remaining, random.uniform(20, 45))
+            await human.think(chunk * 950, chunk * 1000)
+            remaining -= chunk
+            if remaining > 30 and random.random() < 0.15:
+                await human.scroll()
+
+    async def simulate_connection_blip(self) -> float:
+        delay = random.uniform(20, 60)
+        logger.warning("Connection seems slow — waiting %.0f seconds", delay)
+        await asyncio.sleep(delay)
+        return delay

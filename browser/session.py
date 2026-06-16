@@ -24,6 +24,19 @@ _VIEWPORTS = [
 ]
 
 
+def _clipboard_origins(settings: Settings) -> list[str]:
+    from urllib.parse import urlparse
+
+    origins: list[str] = []
+    for url in (settings.base_url, settings.ilsl_portal_url, settings.ilsl_entry_url):
+        parsed = urlparse(url)
+        if parsed.scheme and parsed.netloc:
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            if origin not in origins:
+                origins.append(origin)
+    return origins
+
+
 @dataclass
 class BrowserSession:
     playwright: Playwright
@@ -73,6 +86,12 @@ async def open_session(settings: Settings) -> AsyncIterator[BrowserSession]:
 
     context = await browser.new_context(**context_kwargs)
     context.set_default_timeout(settings.default_timeout_ms)
+
+    for origin in _clipboard_origins(settings):
+        await context.grant_permissions(
+            ["clipboard-read", "clipboard-write"],
+            origin=origin,
+        )
 
     page = await context.new_page()
     human = HumanActor(page)
