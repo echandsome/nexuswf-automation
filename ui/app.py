@@ -2,23 +2,85 @@
 
 from __future__ import annotations
 
-import json
 import tkinter as tk
-from pathlib import Path
 from tkinter import messagebox, scrolledtext, ttk
 
 from config.settings import MIN_ENTRY_DURATION_HOURS, SETTINGS_PATH, Settings
 from schedule.progress import ProgressStore
 from ui.runner import AutomationRunner
 
+# Palette
+_BG = "#f0f2f5"
+_SURFACE = "#ffffff"
+_TEXT = "#1a1a1a"
+_MUTED = "#5c6370"
+_BORDER = "#d8dde6"
+_LOG_BG = "#1e1e1e"
+_LOG_FG = "#d4d4d4"
+_ACCENT = "#0078d4"
+
+_STATUS_COLORS = {
+    "ready": "#9e9e9e",
+    "running": "#2e7d32",
+    "stopping": "#ef6c00",
+    "completed": "#1565c0",
+    "stopped": "#757575",
+    "error": "#c62828",
+}
+
+
+def _apply_theme(root: tk.Tk) -> ttk.Style:
+    style = ttk.Style(root)
+    for theme in ("vista", "clam", "default"):
+        try:
+            style.theme_use(theme)
+            break
+        except tk.TclError:
+            continue
+
+    root.configure(bg=_BG)
+
+    font = ("Segoe UI", 10)
+    font_bold = ("Segoe UI Semibold", 10)
+    font_title = ("Segoe UI Semibold", 16)
+    font_subtitle = ("Segoe UI", 10)
+
+    style.configure(".", background=_BG, font=font)
+    style.configure("TFrame", background=_BG)
+    style.configure("Surface.TFrame", background=_SURFACE)
+    style.configure("TLabel", background=_BG, foreground=_TEXT)
+    style.configure("Surface.TLabel", background=_SURFACE, foreground=_TEXT)
+    style.configure("Header.TLabel", background=_SURFACE, foreground=_TEXT, font=font_title)
+    style.configure("Subtitle.TLabel", background=_SURFACE, foreground=_MUTED, font=font_subtitle)
+    style.configure("Section.TLabel", background=_BG, foreground=_TEXT, font=font_bold)
+    style.configure("Hint.TLabel", background=_BG, foreground=_MUTED, font=("Segoe UI", 9))
+    style.configure("Status.TLabel", background=_BG, foreground=_MUTED, font=font)
+    style.configure("TCheckbutton", background=_BG)
+    style.configure("TNotebook", background=_BG, padding=2)
+    style.configure("TNotebook.Tab", padding=(14, 8), font=font)
+    style.configure("TButton", font=font, padding=(14, 7))
+    style.configure("Accent.TButton", font=font_bold)
+    style.configure("TLabelframe", background=_BG)
+    style.configure("TLabelframe.Label", background=_BG, font=font_bold)
+    style.configure("TEntry", padding=4)
+    style.configure(
+        "Horizontal.TProgressbar",
+        troughcolor=_BORDER,
+        background=_ACCENT,
+        thickness=10,
+    )
+
+    return style
+
 
 class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("NexusWF Automation")
-        self.geometry("920x780")
-        self.minsize(800, 640)
+        self.geometry("920x800")
+        self.minsize(800, 660)
 
+        _apply_theme(self)
         self.runner = AutomationRunner()
         self._vars: dict[str, tk.Variable] = {}
         self._build()
@@ -26,49 +88,100 @@ class App(tk.Tk):
         self._poll()
 
     def _build(self) -> None:
-        outer = ttk.Frame(self, padding=12)
+        outer = ttk.Frame(self, padding=16)
         outer.pack(fill=tk.BOTH, expand=True)
+
+        header = ttk.Frame(outer, style="Surface.TFrame", padding=(16, 14))
+        header.pack(fill=tk.X, pady=(0, 12))
+        ttk.Label(header, text="NexusWF Automation", style="Header.TLabel").pack(
+            anchor=tk.W
+        )
+        ttk.Label(
+            header,
+            text="Configure credentials, schedule runs, and monitor automation progress.",
+            style="Subtitle.TLabel",
+        ).pack(anchor=tk.W, pady=(4, 0))
 
         notebook = ttk.Notebook(outer)
         notebook.pack(fill=tk.BOTH, expand=True)
 
-        notebook.add(self._credentials_tab(notebook), text="Credentials")
-        notebook.add(self._urls_tab(notebook), text="URLs")
-        notebook.add(self._run_tab(notebook), text="Run")
-        notebook.add(self._browser_tab(notebook), text="Browser")
+        notebook.add(self._credentials_tab(notebook), text="  Credentials  ")
+        notebook.add(self._urls_tab(notebook), text="  URLs  ")
+        notebook.add(self._run_tab(notebook), text="  Run  ")
+        notebook.add(self._browser_tab(notebook), text="  Browser  ")
 
         actions = ttk.Frame(outer)
-        actions.pack(fill=tk.X, pady=(10, 6))
+        actions.pack(fill=tk.X, pady=(14, 10))
 
+        status_frame = ttk.Frame(actions)
+        status_frame.pack(side=tk.LEFT)
+        self._status_dot = tk.Label(
+            status_frame,
+            text="\u25cf",
+            fg=_STATUS_COLORS["ready"],
+            bg=_BG,
+            font=("Segoe UI", 11),
+        )
+        self._status_dot.pack(side=tk.LEFT, padx=(0, 6))
         self._status_var = tk.StringVar(value="Ready")
-        ttk.Label(actions, textvariable=self._status_var).pack(side=tk.LEFT)
+        ttk.Label(status_frame, textvariable=self._status_var, style="Status.TLabel").pack(
+            side=tk.LEFT
+        )
 
         ttk.Button(actions, text="Save settings", command=self._save).pack(
-            side=tk.RIGHT, padx=(6, 0)
+            side=tk.RIGHT, padx=(8, 0)
         )
-        self._start_btn = ttk.Button(actions, text="Start", command=self._start)
-        self._start_btn.pack(side=tk.RIGHT, padx=(6, 0))
+        self._start_btn = ttk.Button(
+            actions, text="Start", style="Accent.TButton", command=self._start
+        )
+        self._start_btn.pack(side=tk.RIGHT, padx=(8, 0))
         self._stop_btn = ttk.Button(
             actions, text="Stop", command=self._stop, state=tk.DISABLED
         )
-        self._stop_btn.pack(side=tk.RIGHT, padx=(6, 0))
+        self._stop_btn.pack(side=tk.RIGHT, padx=(8, 0))
 
-        progress = ttk.LabelFrame(outer, text="Progress", padding=8)
-        progress.pack(fill=tk.X, pady=(0, 8))
+        progress = ttk.LabelFrame(outer, text="Progress", padding=(12, 10))
+        progress.pack(fill=tk.X, pady=(0, 10))
+        self._progress_bar = ttk.Progressbar(
+            progress, orient=tk.HORIZONTAL, mode="determinate", maximum=100
+        )
+        self._progress_bar.pack(fill=tk.X, pady=(0, 6))
         self._progress_var = tk.StringVar(value="No run in progress")
-        ttk.Label(progress, textvariable=self._progress_var).pack(anchor=tk.W)
+        ttk.Label(progress, textvariable=self._progress_var, style="Hint.TLabel").pack(
+            anchor=tk.W
+        )
 
-        log_frame = ttk.LabelFrame(outer, text="Log", padding=8)
+        log_frame = ttk.LabelFrame(outer, text="Log", padding=(10, 8))
         log_frame.pack(fill=tk.BOTH, expand=True)
         self._log = scrolledtext.ScrolledText(
-            log_frame, height=14, state=tk.DISABLED, wrap=tk.WORD
+            log_frame,
+            height=12,
+            state=tk.DISABLED,
+            wrap=tk.WORD,
+            font=("Consolas", 9),
+            bg=_LOG_BG,
+            fg=_LOG_FG,
+            insertbackground=_LOG_FG,
+            relief=tk.FLAT,
+            borderwidth=0,
+            padx=8,
+            pady=8,
         )
         self._log.pack(fill=tk.BOTH, expand=True)
 
+    def _section(self, parent: ttk.Frame, row: int, title: str) -> int:
+        ttk.Label(parent, text=title, style="Section.TLabel").grid(
+            row=row, column=0, columnspan=2, sticky=tk.W, pady=(0, 8)
+        )
+        return row + 1
+
     def _credentials_tab(self, parent: ttk.Notebook) -> ttk.Frame:
-        frame = ttk.Frame(parent, padding=12)
-        self._field(frame, "NexusWF username", "username", 0)
-        self._field(frame, "NexusWF password", "password", 1, show="*")
+        frame = ttk.Frame(parent, padding=(16, 14))
+        row = self._section(frame, 0, "NexusWF")
+        self._field(frame, "Username", "username", row)
+        row += 1
+        self._field(frame, "Password", "password", row, show="*")
+        row += 1
 
         self._vars["use_same_ilsl_credentials"] = tk.BooleanVar(value=True)
         ttk.Checkbutton(
@@ -76,38 +189,46 @@ class App(tk.Tk):
             text="Use same credentials for ILSL portal",
             variable=self._vars["use_same_ilsl_credentials"],
             command=self._toggle_ilsl_fields,
-        ).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(12, 4))
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=(16, 4))
+        row += 1
 
-        self._ilsl_user = self._field(frame, "ILSL username", "ilsl_username", 3)
-        self._ilsl_pass = self._field(frame, "ILSL password", "ilsl_password", 4, show="*")
+        row = self._section(frame, row, "ILSL Portal")
+        self._ilsl_user = self._field(frame, "Username", "ilsl_username", row)
+        row += 1
+        self._ilsl_pass = self._field(frame, "Password", "ilsl_password", row, show="*")
         frame.columnconfigure(1, weight=1)
         return frame
 
     def _urls_tab(self, parent: ttk.Notebook) -> ttk.Frame:
-        frame = ttk.Frame(parent, padding=12)
-        self._field(frame, "NexusWF base URL", "base_url", 0)
-        self._field(frame, "ILSL portal URL", "ilsl_portal_url", 1)
+        frame = ttk.Frame(parent, padding=(16, 14))
+        row = self._section(frame, 0, "Endpoints")
+        self._field(frame, "NexusWF base URL", "base_url", row)
+        row += 1
+        self._field(frame, "ILSL portal URL", "ilsl_portal_url", row)
+        row += 1
         self._field(
             frame,
             "ILSL entry URL (optional)",
             "ilsl_entry_url",
-            2,
+            row,
             hint="Leave blank to use portal base + /entry",
         )
         frame.columnconfigure(1, weight=1)
         return frame
 
     def _run_tab(self, parent: ttk.Notebook) -> ttk.Frame:
-        frame = ttk.Frame(parent, padding=12)
+        frame = ttk.Frame(parent, padding=(16, 14))
+        row = self._section(frame, 0, "Task schedule")
         self._spin(
             frame,
             f"Entry duration (hours, min {MIN_ENTRY_DURATION_HOURS:g})",
             "entry_duration_hours",
-            0,
+            row,
             from_=MIN_ENTRY_DURATION_HOURS,
             to=24,
             increment=0.5,
         )
+        row += 1
 
         self._vars["continuous_mode"] = tk.BooleanVar(value=False)
         ttk.Checkbutton(
@@ -115,16 +236,20 @@ class App(tk.Tk):
             text="Continuous mode (run multiple tasks one after another)",
             variable=self._vars["continuous_mode"],
             command=self._toggle_task_count,
-        ).grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(12, 4))
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=(16, 4))
+        row += 1
 
         self._task_count = self._spin(
-            frame, "Number of tasks", "task_count", 2, from_=1, to=20, increment=1
+            frame, "Number of tasks", "task_count", row, from_=1, to=20, increment=1
         )
+        row += 1
+
+        row = self._section(frame, row, "After run")
         self._spin(
             frame,
             "Keep browser open after finish (seconds)",
             "keep_open_seconds",
-            3,
+            row,
             from_=0,
             to=300,
             increment=5,
@@ -133,17 +258,19 @@ class App(tk.Tk):
         return frame
 
     def _browser_tab(self, parent: ttk.Notebook) -> ttk.Frame:
-        frame = ttk.Frame(parent, padding=12)
+        frame = ttk.Frame(parent, padding=(16, 14))
+        row = self._section(frame, 0, "Playwright")
         self._vars["headless"] = tk.BooleanVar(value=False)
         ttk.Checkbutton(
             frame, text="Headless browser", variable=self._vars["headless"]
-        ).grid(row=0, column=0, columnspan=2, sticky=tk.W)
+        ).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=(0, 8))
+        row += 1
 
         self._field(
             frame,
             "Browser channel (optional)",
             "browser_channel",
-            1,
+            row,
             hint='e.g. "chrome" or "msedge"; leave blank for bundled Chromium',
         )
         frame.columnconfigure(1, weight=1)
@@ -159,14 +286,14 @@ class App(tk.Tk):
         show: str | None = None,
         hint: str = "",
     ) -> ttk.Entry:
-        ttk.Label(parent, text=label).grid(row=row, column=0, sticky=tk.W, pady=4)
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky=tk.W, pady=5)
         var = tk.StringVar()
         self._vars[key] = var
         entry = ttk.Entry(parent, textvariable=var, show=show or "")
-        entry.grid(row=row, column=1, sticky=tk.EW, padx=(12, 0), pady=4)
+        entry.grid(row=row, column=1, sticky=tk.EW, padx=(16, 0), pady=5)
         if hint:
-            ttk.Label(parent, text=hint, foreground="#666").grid(
-                row=row + 1, column=1, sticky=tk.W, padx=(12, 0)
+            ttk.Label(parent, text=hint, style="Hint.TLabel").grid(
+                row=row + 1, column=1, sticky=tk.W, padx=(16, 0), pady=(0, 4)
             )
         return entry
 
@@ -181,7 +308,7 @@ class App(tk.Tk):
         to: float,
         increment: float,
     ) -> ttk.Spinbox:
-        ttk.Label(parent, text=label).grid(row=row, column=0, sticky=tk.W, pady=4)
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky=tk.W, pady=5)
         var = tk.DoubleVar() if isinstance(increment, float) and increment != 1 else tk.IntVar()
         self._vars[key] = var
         spin = ttk.Spinbox(
@@ -192,8 +319,13 @@ class App(tk.Tk):
             increment=increment,
             width=12,
         )
-        spin.grid(row=row, column=1, sticky=tk.W, padx=(12, 0), pady=4)
+        spin.grid(row=row, column=1, sticky=tk.W, padx=(16, 0), pady=5)
         return spin
+
+    def _set_status(self, text: str, key: str = "ready") -> None:
+        self._status_var.set(text)
+        color = _STATUS_COLORS.get(key, _STATUS_COLORS["ready"])
+        self._status_dot.configure(fg=color)
 
     def _toggle_ilsl_fields(self) -> None:
         state = tk.DISABLED if self._vars["use_same_ilsl_credentials"].get() else tk.NORMAL
@@ -260,7 +392,7 @@ class App(tk.Tk):
             f"Starting — {settings.entry_duration_hours:g} h/task, "
             f"{settings.task_count if settings.continuous_mode else 1} task(s)"
         )
-        self._status_var.set("Running…")
+        self._set_status("Running…", "running")
         self._start_btn.configure(state=tk.DISABLED)
         self._stop_btn.configure(state=tk.NORMAL)
         self.runner.start(settings)
@@ -269,7 +401,7 @@ class App(tk.Tk):
         if not self.runner.is_running():
             return
         self._append_log("Stop requested — clocking out…")
-        self._status_var.set("Stopping…")
+        self._set_status("Stopping…", "stopping")
         self._stop_btn.configure(state=tk.DISABLED)
         self.runner.stop()
 
@@ -280,40 +412,48 @@ class App(tk.Tk):
         self._log.configure(state=tk.DISABLED)
 
     def _update_progress(self) -> None:
-        parts: list[str] = []
-        if SETTINGS_PATH.parent.joinpath("entry_progress.json").is_file():
-            progress = ProgressStore(SETTINGS_PATH.parent / "entry_progress.json").load()
-            if progress:
-                pct = (
-                    100 * progress.elapsed_seconds / progress.target_duration_seconds
-                    if progress.target_duration_seconds
-                    else 0
-                )
-                parts.append(
-                    f"Records: {progress.completed_count} done, "
-                    f"{progress.elapsed_seconds / 3600:.2f} h elapsed "
-                    f"({pct:.0f}% of task target)"
-                )
-        self._progress_var.set(" | ".join(parts) if parts else "No progress yet")
+        progress_path = SETTINGS_PATH.parent / "entry_progress.json"
+        if not progress_path.is_file():
+            self._progress_bar["value"] = 0
+            self._progress_var.set("No run in progress")
+            return
+
+        progress = ProgressStore(progress_path).load()
+        if not progress:
+            self._progress_bar["value"] = 0
+            self._progress_var.set("No progress yet")
+            return
+
+        pct = (
+            100 * progress.elapsed_seconds / progress.target_duration_seconds
+            if progress.target_duration_seconds
+            else 0
+        )
+        self._progress_bar["value"] = min(pct, 100)
+        self._progress_var.set(
+            f"Records: {progress.completed_count} done · "
+            f"{progress.elapsed_seconds / 3600:.2f} h elapsed · "
+            f"{pct:.0f}% of task target"
+        )
 
     def _poll(self) -> None:
         for line in self.runner.drain_logs():
             self._append_log(line)
 
         if self.runner.is_running():
-            self._status_var.set("Running…")
+            self._set_status("Running…", "running")
         elif self.runner.status == "stopped":
-            self._status_var.set("Stopped")
+            self._set_status("Stopped", "stopped")
             self._start_btn.configure(state=tk.NORMAL)
             self._stop_btn.configure(state=tk.DISABLED)
             self.runner.status = "idle"
         elif self.runner.status == "completed":
-            self._status_var.set("Completed")
+            self._set_status("Completed", "completed")
             self._start_btn.configure(state=tk.NORMAL)
             self._stop_btn.configure(state=tk.DISABLED)
             self.runner.status = "idle"
         elif self.runner.status == "error":
-            self._status_var.set(f"Error: {self.runner.error}")
+            self._set_status(f"Error: {self.runner.error}", "error")
             self._start_btn.configure(state=tk.NORMAL)
             self._stop_btn.configure(state=tk.DISABLED)
             self.runner.status = "idle"
