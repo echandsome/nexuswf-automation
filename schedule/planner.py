@@ -25,7 +25,8 @@ _SELECT_FIELD_SECONDS = 2.0
 _PRE_SUBMIT_SECONDS = 2.0
 _MIN_PACE = 0.30
 _MAX_PACE = 1.15
-# NexusWF clocks out after prolonged inactivity; never rest longer than this.
+# NexusWF clocks out after prolonged inactivity; keep each pause within this range.
+MIN_BREAK_SECONDS = 45
 MAX_BREAK_SECONDS = 180
 
 
@@ -36,24 +37,55 @@ class PlannedBreak:
 
 
 def clamp_break_seconds(duration_seconds: float) -> float:
-    return min(duration_seconds, MAX_BREAK_SECONDS)
+    return max(MIN_BREAK_SECONDS, min(duration_seconds, MAX_BREAK_SECONDS))
+
+
+def _random_break_durations(budget: float, count: int, rng: random.Random) -> list[float]:
+    """Split break budget into `count` varied pauses, each within [MIN, MAX] seconds."""
+    if count <= 0:
+        return []
+
+    durations: list[float] = []
+    remaining = budget
+    for i in range(count):
+        slots_left = count - i
+        if slots_left == 1:
+            durations.append(clamp_break_seconds(remaining))
+            break
+
+        min_for_rest = MIN_BREAK_SECONDS * (slots_left - 1)
+        hi = min(MAX_BREAK_SECONDS, remaining - min_for_rest)
+        lo = MIN_BREAK_SECONDS
+        if hi < lo:
+            hi = lo
+        duration = rng.uniform(lo, hi)
+        durations.append(duration)
+        remaining -= duration
+
+    return durations
 
 
 def plan_breaks(total_records: int, target_seconds: float, seed: int) -> list[PlannedBreak]:
-    """Reserve spread-out rest periods; each pause is capped to avoid clock-out."""
+    """Reserve spread-out rest periods with varied lengths under the clock-out cap."""
     rng = random.Random(seed)
-    count = rng.randint(5, 8)
-    break_total = target_seconds * rng.uniform(0.10, 0.15)
-    raw_each = break_total / count
+    break_budget = target_seconds * rng.uniform(0.05, 0.10)
+    min_breaks_for_budget = max(1, int(break_budget // MAX_BREAK_SECONDS) + 1)
+    desired_count = rng.randint(max(5, min_breaks_for_budget), max(5, min_breaks_for_budget + 5))
+    desired_count = min(desired_count, 20)
+
     points = sorted(
-        {max(0, min(total_records - 1, int(total_records * (i + 1) / (count + 1)) - 1)) for i in range(count)}
+        {
+            max(0, min(total_records - 1, int(total_records * (i + 1) / (desired_count + 1)) - 1))
+            for i in range(desired_count)
+        }
     )
+    if not points:
+        return []
+
+    durations = _random_break_durations(break_budget, len(points), rng)
     return [
-        PlannedBreak(
-            after_index=point,
-            duration_seconds=clamp_break_seconds(raw_each * rng.uniform(0.85, 1.15)),
-        )
-        for point in points
+        PlannedBreak(after_index=point, duration_seconds=duration)
+        for point, duration in zip(points, durations)
     ]
 
 

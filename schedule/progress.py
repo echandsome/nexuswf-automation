@@ -12,7 +12,7 @@ from schedule.planner import PlannedBreak, clamp_break_seconds, plan_breaks, sch
 
 logger = logging.getLogger(__name__)
 
-_PROGRESS_VERSION = 2
+_PROGRESS_VERSION = 4
 
 
 def _utc_now() -> str:
@@ -128,6 +128,14 @@ class ProgressStore:
 
         if existing and existing.task_file == task_key:
             dirty = False
+
+            if existing.version < _PROGRESS_VERSION:
+                logger.info("Re-planning breaks with varied durations (progress v%d)", _PROGRESS_VERSION)
+                existing.version = _PROGRESS_VERSION
+                existing.planned_breaks = plan_breaks(
+                    total_records, existing.target_duration_seconds, seed
+                )
+                dirty = True
 
             # Apply a newly requested target duration to the in-flight run.
             if abs(existing.target_duration_seconds - target_duration_seconds) > 1.0:
