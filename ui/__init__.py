@@ -1,0 +1,5 @@
+"""Desktop UI package."""
+
+from ui.app import run_app
+
+__all__ = ["run_app"]

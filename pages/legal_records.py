@@ -19,6 +19,7 @@ PASSWORD_INPUT = 'input[name="password"]'
 LOGIN_BUTTON = 'button[name="login"]'
 DOWNLOAD_BUTTON = "#headerDownloadBtn"
 TASK_FILENAME = "#headerTaskFilename"
+REQUEST_TASK_BUTTON = "#requestTaskBtn"
 
 
 class LegalRecordsPage(BasePage):
@@ -76,6 +77,14 @@ class LegalRecordsPage(BasePage):
 
     async def ensure_authenticated(self, username: str, password: str) -> None:
         """Log in only when the authorized-access form is shown."""
+        if await self.page.locator("#mainRecordForm").is_visible():
+            logger.info("Case entry form already open — ready to work")
+            return
+
+        if await self.is_login_page():
+            await self.login(username, password)
+            return
+
         await self.ensure_on_portal()
 
         if await self.is_login_page():
@@ -144,6 +153,49 @@ class LegalRecordsPage(BasePage):
         await download.save_as(dest)
         logger.info("Saved task file to %s", dest)
         return dest
+
+    async def current_task_filename(self) -> str:
+        filename_el = self.page.locator(TASK_FILENAME)
+        if await filename_el.count():
+            return (await filename_el.inner_text()).strip()
+        return ""
+
+    async def request_new_task(self, previous_filename: str = "") -> None:
+        """Click "Request New Task" and wait for a fresh dataset to be offered."""
+        logger.info("Requesting a new task (previous: %s)", previous_filename or "n/a")
+        await self.human.think(800, 1800)
+        await self.human.click(REQUEST_TASK_BUTTON)
+
+        try:
+            await self.page.wait_for_function(
+                """([sel, prev]) => {
+                    const el = document.querySelector(sel);
+                    if (!el) return false;
+                    const text = el.innerText.trim();
+                    return text.length > 0 && text !== prev;
+                }""",
+                arg=[TASK_FILENAME, previous_filename],
+                timeout=120_000,
+            )
+        except PlaywrightTimeoutError:
+            logger.warning(
+                "Task filename did not change after requesting a new task — "
+                "waiting for the download link instead"
+            )
+            await self.page.locator(DOWNLOAD_BUTTON).wait_for(
+                state="visible", timeout=30_000
+            )
+
+        await self.human.think(600, 1400)
+        logger.info("New task ready: %s", await self.current_task_filename())
+
+    async def request_and_download_new_task(
+        self, downloads_dir: Path, previous_filename: str = ""
+    ) -> Path | None:
+        # Prefer the filename currently shown on the portal to detect the change.
+        displayed = await self.current_task_filename()
+        await self.request_new_task(displayed or previous_filename)
+        return await self.download_task_if_needed(downloads_dir)
 
 
 def legal_records_page(page: Page, human: HumanActor, portal_url: str) -> LegalRecordsPage:

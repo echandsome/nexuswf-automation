@@ -52,6 +52,7 @@ class BrowserSession:
         await self.context.close()
         await self.browser.close()
         await self.playwright.stop()
+        logger.info("Browser closed")
 
 
 @asynccontextmanager

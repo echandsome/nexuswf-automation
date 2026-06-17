@@ -18,7 +18,6 @@ CLIENT_NAME = "#c_client"
 CASE_TYPE = "#c_type"
 JURISDICTION = "#c_jur"
 RECORD_SOURCE = "#c_source"
-FILE_EXECUTOR = "#c_officer"
 DOCUMENT_STATUS = "#c_doc_status"
 CASE_STATUS = "#c_status"
 CASE_SUMMARY = "#c_summary"
@@ -54,7 +53,7 @@ class CaseEntryPage(BasePage):
             await self.page.goto(entry_url, wait_until="domcontentloaded")
             await self._wait_for_form()
 
-    async def enter_record(self, record: CaseRecord, file_executor: str) -> None:
+    async def enter_record(self, record: CaseRecord) -> None:
         logger.info(
             "Entering record %d/%s — %s",
             record.index + 1,
@@ -76,8 +75,6 @@ class CaseEntryPage(BasePage):
             await self.human.paste_text(RECORD_SOURCE, record.record_source)
             await self.human.pause(200, 550)
 
-        await self.human.paste_text(FILE_EXECUTOR, file_executor)
-        await self.human.pause(250, 650)
         await self.human.select_option(DOCUMENT_STATUS, record.document_status)
         await self.human.pause(200, 550)
         await self.human.select_option(CASE_STATUS, record.case_status)

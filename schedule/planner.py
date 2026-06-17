@@ -7,9 +7,13 @@ import logging
 import random
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from data.records import CaseRecord
 from human.actor import HumanActor
+
+if TYPE_CHECKING:
+    from browser.control import RunControl
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +61,11 @@ def schedule_seed(task_file: str, target_seconds: float) -> int:
     return hash((task_file, round(target_seconds, 3))) & 0xFFFFFFFF
 
 
-def estimate_entry_seconds(record: CaseRecord, file_executor: str) -> float:
+def estimate_entry_seconds(record: CaseRecord) -> float:
     """Estimate copy-paste entry duration at pace 1.0 (flat per field, not per character)."""
-    text_fields = 5  # case_ref, client, jurisdiction, executor, summary
+    text_fields = 4  # case_ref, client, jurisdiction, summary
     if record.record_source:
         text_fields += 1
-    _ = file_executor  # same paste cost regardless of value length
 
     between_fields = text_fields + 3  # pauses between each step
     return (
@@ -120,9 +123,9 @@ class EntryScheduler:
         """Portion of the row slot spent on active form entry (rest is idle within slot)."""
         return slot_seconds * random.uniform(0.78, 0.88)
 
-    def compute_pace(self, record: CaseRecord, file_executor: str, entry_budget: float) -> float:
+    def compute_pace(self, record: CaseRecord, entry_budget: float) -> float:
         """Scale human delays so natural entry fits the allotted entry budget."""
-        natural = estimate_entry_seconds(record, file_executor)
+        natural = estimate_entry_seconds(record)
         if natural <= 0:
             return 1.0
         pace = entry_budget / natural
@@ -137,11 +140,20 @@ class EntryScheduler:
     def should_simulate_interruption(self) -> bool:
         return self.completed_count > 3 and random.random() < 0.03
 
-    async def fill_to_slot(self, human: HumanActor, row_start: float, slot_seconds: float) -> float:
+    async def fill_to_slot(
+        self,
+        human: HumanActor,
+        row_start: float,
+        slot_seconds: float,
+        control: RunControl | None = None,
+    ) -> float:
         """Idle until the row slot elapses. Returns extra seconds waited."""
         padding_start = time.monotonic()
 
         while True:
+            if control is not None:
+                control.raise_if_stopped()
+
             elapsed = time.monotonic() - row_start
             remaining = slot_seconds - elapsed
             if remaining <= 0.2:
@@ -158,7 +170,12 @@ class EntryScheduler:
 
         return time.monotonic() - padding_start
 
-    async def take_break(self, human: HumanActor, duration_seconds: float) -> float:
+    async def take_break(
+        self,
+        human: HumanActor,
+        duration_seconds: float,
+        control: RunControl | None = None,
+    ) -> float:
         """Pause up to MAX_BREAK_SECONDS; returns actual seconds rested."""
         duration = clamp_break_seconds(duration_seconds)
         if duration_seconds > MAX_BREAK_SECONDS:
@@ -170,6 +187,8 @@ class EntryScheduler:
         logger.info("Taking a scheduled break (%.0f seconds)", duration)
         remaining = duration
         while remaining > 1:
+            if control is not None:
+                control.raise_if_stopped()
             chunk = min(remaining, random.uniform(20, 45))
             await human.think(chunk * 950, chunk * 1000)
             remaining -= chunk

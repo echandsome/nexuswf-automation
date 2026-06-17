@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from playwright.async_api import Page
 
@@ -15,6 +16,9 @@ from pages.case_entry import CaseEntryPage
 from schedule.planner import EntryScheduler
 from schedule.progress import EntryProgress, ProgressStore
 
+if TYPE_CHECKING:
+    from browser.control import RunControl
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,6 +27,7 @@ async def run_record_entry(
     human: HumanActor,
     settings: Settings,
     task_file: Path,
+    control: RunControl | None = None,
 ) -> EntryProgress:
     records = load_task_file(task_file)
     store = ProgressStore(settings.entry_progress_path)
@@ -53,7 +58,11 @@ async def run_record_entry(
     )
 
     for record in pending:
-        await _enter_one_record(entry, human, settings, store, progress, record, len(records))
+        if control is not None:
+            control.raise_if_stopped()
+        await _enter_one_record(
+            entry, human, settings, store, progress, record, len(records), control
+        )
 
     logger.info(
         "Record entry complete — %d records in %.0f minutes (target %.0f minutes)",
@@ -72,7 +81,11 @@ async def _enter_one_record(
     progress: EntryProgress,
     record: CaseRecord,
     total_records: int,
+    control: RunControl | None = None,
 ) -> None:
+    if control is not None:
+        control.raise_if_stopped()
+
     scheduler = EntryScheduler(
         progress.target_duration_seconds,
         total_records,
@@ -82,7 +95,7 @@ async def _enter_one_record(
     )
     slot_seconds = scheduler.next_slot_seconds()
     entry_budget = scheduler.entry_budget(slot_seconds)
-    pace = scheduler.compute_pace(record, settings.file_executor, entry_budget)
+    pace = scheduler.compute_pace(record, entry_budget)
 
     row_start = time.monotonic()
 
@@ -95,11 +108,11 @@ async def _enter_one_record(
 
     human.set_pace(pace)
     try:
-        await entry.enter_record(record, settings.file_executor)
+        await entry.enter_record(record)
     finally:
         human.reset_pace()
 
-    await scheduler.fill_to_slot(human, row_start, slot_seconds)
+    await scheduler.fill_to_slot(human, row_start, slot_seconds, control)
     total_row_seconds = time.monotonic() - row_start
 
     progress.mark_completed(record.index, record.case_ref, total_row_seconds)
@@ -118,7 +131,7 @@ async def _enter_one_record(
     scheduled_break = scheduler.break_after(record.index)
     if scheduled_break:
         break_seconds = await scheduler.take_break(
-            human, scheduled_break.duration_seconds
+            human, scheduled_break.duration_seconds, control
         )
         progress.log_interruption("scheduled_break", break_seconds, detail="planned")
         store.save(progress)
