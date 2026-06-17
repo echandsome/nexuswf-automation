@@ -15,7 +15,6 @@ from human.actor import HumanActor
 from pages.dashboard import DashboardPage
 from pages.legal_records import LegalRecordsPage, legal_records_page
 from schedule.progress import ProgressStore
-from schedule.run_state import RunStateStore
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +27,9 @@ async def run_workflow(
     await ensure_logged_in(session, settings)
 
     dashboard = DashboardPage(session.page, session.human, settings.base_url)
-    run_store = RunStateStore(settings.run_state_path)
-    run_state = run_store.load()
-    resume_entry = _should_go_directly_to_entry(settings, run_state)
+    target_tasks = settings.task_count if settings.continuous_mode else 1
+    completed_tasks = 0
+    resume_entry = _should_go_directly_to_entry(settings, completed_tasks)
 
     already_clocked_in = await dashboard.is_clocked_in()
     if already_clocked_in:
@@ -48,25 +47,28 @@ async def run_workflow(
     records = legal_records_page(work.records_tab, records_human, settings.ilsl_portal_url)
     await records.ensure_authenticated(settings.ilsl_username, settings.ilsl_password)
 
-    target_tasks = settings.task_count if settings.continuous_mode else 1
     logger.info(
-        "Processing %d task(s) sequentially (%d already done)%s",
+        "This run will process %d task(s)%s",
         target_tasks,
-        run_state.completed_tasks,
         " [continuous mode]" if settings.continuous_mode else "",
     )
 
     last_task_file: Path | None = None
 
     try:
-        while run_state.completed_tasks < target_tasks:
+        while completed_tasks < target_tasks:
             if control is not None:
                 control.raise_if_stopped()
 
-            task_number = run_state.completed_tasks + 1
+            task_number = completed_tasks + 1
             logger.info("=== Starting task %d of %d ===", task_number, target_tasks)
 
-            task_file = await _resolve_task_file(records, settings, run_state)
+            task_file = await _resolve_task_file(
+                records,
+                settings,
+                completed_tasks=completed_tasks,
+                last_task_file=last_task_file,
+            )
             if task_file is None:
                 logger.error("No task file available for task %d — stopping", task_number)
                 break
@@ -95,14 +97,13 @@ async def run_workflow(
                 last_task_file = task_file
                 break
 
-            if run_state.mark_done(str(task_file.resolve())):
-                run_store.save(run_state)
+            completed_tasks += 1
             last_task_file = task_file
 
             logger.info(
                 "=== Task %d complete (%d of %d) — %.2f h, %d records ===",
                 task_number,
-                run_state.completed_tasks,
+                completed_tasks,
                 target_tasks,
                 progress.elapsed_seconds / 3600,
                 progress.completed_count,
@@ -110,8 +111,8 @@ async def run_workflow(
 
         if control is None or not control.stopped:
             logger.info(
-                "All requested tasks finished (%d of %d completed)",
-                run_state.completed_tasks,
+                "Run finished — %d of %d task(s) completed this session",
+                completed_tasks,
                 target_tasks,
             )
     except WorkflowStopped:
@@ -132,23 +133,21 @@ async def run_workflow(
     return last_task_file
 
 
-def _should_go_directly_to_entry(settings: Settings, run_state) -> bool:
+def _should_go_directly_to_entry(settings: Settings, completed_tasks: int) -> bool:
     """Skip the portal task page and open the entry form when work can begin."""
-    if _has_in_flight_progress(settings, run_state):
+    if _has_in_flight_progress(settings):
         return True
-    if run_state.completed_tasks > 0:
+    if completed_tasks > 0:
         return False
     return _find_latest_task_file(settings.downloads_dir) is not None
 
 
-def _has_in_flight_progress(settings: Settings, run_state) -> bool:
+def _has_in_flight_progress(settings: Settings) -> bool:
     progress = ProgressStore(settings.entry_progress_path).load()
     if not progress:
         return False
     task_file = Path(progress.task_file)
     if not task_file.is_file():
-        return False
-    if run_state.is_counted(str(task_file.resolve())):
         return False
     records = load_task_file(task_file)
     return not progress.is_done(len(records))
@@ -157,20 +156,20 @@ def _has_in_flight_progress(settings: Settings, run_state) -> bool:
 async def _resolve_task_file(
     records: LegalRecordsPage,
     settings: Settings,
-    run_state,
+    *,
+    completed_tasks: int,
+    last_task_file: Path | None,
 ) -> Path | None:
-    """Pick the task file for the current run, resuming or requesting as needed."""
+    """Pick the task file for the current session, resuming or requesting as needed."""
     progress = ProgressStore(settings.entry_progress_path).load()
 
-    # Resume an in-flight task that has not yet been counted as done.
     if progress:
         in_flight = Path(progress.task_file)
-        if in_flight.exists() and not run_state.is_counted(str(in_flight.resolve())):
+        if in_flight.is_file() and not progress.is_done(_record_count(in_flight)):
             logger.info("Resuming in-flight task file: %s", in_flight.name)
             return in_flight
 
-    # First task of this run: use whatever the portal currently offers.
-    if run_state.completed_tasks == 0:
+    if completed_tasks == 0:
         task_file = await records.download_task_if_needed(settings.downloads_dir)
         if task_file is None:
             task_file = _find_latest_task_file(settings.downloads_dir)
@@ -178,10 +177,7 @@ async def _resolve_task_file(
                 logger.info("Using existing task file: %s", task_file.name)
         return task_file
 
-    # Subsequent tasks: request a brand-new dataset.
-    previous_name = ""
-    if run_state.completed_files:
-        previous_name = Path(run_state.completed_files[-1]).name
+    previous_name = last_task_file.name if last_task_file else ""
     return await records.request_and_download_new_task(
         settings.downloads_dir, previous_filename=previous_name
     )

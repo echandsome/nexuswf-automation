@@ -9,7 +9,6 @@ from tkinter import messagebox, scrolledtext, ttk
 
 from config.settings import MIN_ENTRY_DURATION_HOURS, SETTINGS_PATH, Settings
 from schedule.progress import ProgressStore
-from schedule.run_state import RunStateStore
 from ui.runner import AutomationRunner
 
 
@@ -295,10 +294,6 @@ class App(tk.Tk):
                     f"{progress.elapsed_seconds / 3600:.2f} h elapsed "
                     f"({pct:.0f}% of task target)"
                 )
-        run_path = SETTINGS_PATH.parent / "run_state.json"
-        if run_path.is_file():
-            run_state = RunStateStore(run_path).load()
-            parts.append(f"Tasks completed: {run_state.completed_tasks}")
         self._progress_var.set(" | ".join(parts) if parts else "No progress yet")
 
     def _poll(self) -> None:

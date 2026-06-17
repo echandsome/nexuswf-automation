@@ -43,7 +43,6 @@ class Settings:
     session_dir: Path
     storage_state_path: Path
     entry_progress_path: Path
-    run_state_path: Path
     default_timeout_ms: int
     entry_duration_hours: float
     ilsl_entry_url: str
@@ -118,7 +117,6 @@ class Settings:
             session_dir=session_dir,
             storage_state_path=session_dir / "storage.json",
             entry_progress_path=session_dir / "entry_progress.json",
-            run_state_path=session_dir / "run_state.json",
             default_timeout_ms=30_000,
             entry_duration_hours=entry_duration_hours,
             ilsl_entry_url=ilsl_entry_url,

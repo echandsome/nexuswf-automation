@@ -128,6 +128,8 @@ class LegalRecordsPage(BasePage):
 
     async def download_task_if_needed(self, downloads_dir: Path) -> Path | None:
         """Download the task spreadsheet when a download link is present."""
+        await self._ensure_task_page()
+
         download_btn = self.page.locator(DOWNLOAD_BUTTON)
         try:
             await download_btn.wait_for(state="visible", timeout=15_000)
@@ -146,13 +148,21 @@ class LegalRecordsPage(BasePage):
             return dest
 
         logger.info("Downloading task file: %s", filename)
-        async with self.page.expect_download() as download_info:
+        async with self.page.expect_download(timeout=60_000) as download_info:
             await self.human.click(DOWNLOAD_BUTTON)
 
         download = await download_info.value
         await download.save_as(dest)
         logger.info("Saved task file to %s", dest)
         return dest
+
+    async def _ensure_task_page(self) -> None:
+        """Open the portal task center (download is only available on this page)."""
+        if await self.is_task_page() and self._on_portal_url():
+            return
+        logger.info("Opening records task page at %s", self.portal_url)
+        await self.page.goto(self.portal_url, wait_until="domcontentloaded")
+        await self._wait_for_task_page()
 
     async def current_task_filename(self) -> str:
         filename_el = self.page.locator(TASK_FILENAME)
@@ -161,32 +171,17 @@ class LegalRecordsPage(BasePage):
         return ""
 
     async def request_new_task(self, previous_filename: str = "") -> None:
-        """Click "Request New Task" and wait for a fresh dataset to be offered."""
+        """Click Request New Task, refresh once, then wait for the task page."""
+        await self._ensure_task_page()
+
         logger.info("Requesting a new task (previous: %s)", previous_filename or "n/a")
         await self.human.think(800, 1800)
         await self.human.click(REQUEST_TASK_BUTTON)
-
-        try:
-            await self.page.wait_for_function(
-                """([sel, prev]) => {
-                    const el = document.querySelector(sel);
-                    if (!el) return false;
-                    const text = el.innerText.trim();
-                    return text.length > 0 && text !== prev;
-                }""",
-                arg=[TASK_FILENAME, previous_filename],
-                timeout=120_000,
-            )
-        except PlaywrightTimeoutError:
-            logger.warning(
-                "Task filename did not change after requesting a new task — "
-                "waiting for the download link instead"
-            )
-            await self.page.locator(DOWNLOAD_BUTTON).wait_for(
-                state="visible", timeout=30_000
-            )
-
         await self.human.think(600, 1400)
+
+        logger.info("Refreshing task page after new task request")
+        await self.page.reload(wait_until="domcontentloaded")
+        await self._wait_for_task_page()
         logger.info("New task ready: %s", await self.current_task_filename())
 
     async def request_and_download_new_task(
