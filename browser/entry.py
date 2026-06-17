@@ -38,15 +38,18 @@ async def run_record_entry(
     await entry.open(settings.ilsl_entry_url)
 
     pending = [r for r in records if r.index not in progress.completed_indices]
-    break_total = sum(b.duration_seconds for b in progress.planned_breaks)
-    target_per_row = (progress.target_duration_seconds - break_total) / len(records)
+    remaining_seconds = max(
+        0.0, progress.target_duration_seconds - progress.elapsed_seconds
+    )
     logger.info(
-        "%d of %d records remaining (target %.1f hours, ~%.1fs/row, %.0f min elapsed)",
+        "%d of %d records remaining over %.2f h remaining (~%.1fs/row), "
+        "%.2f h already elapsed of %.2f h target",
         len(pending),
         len(records),
+        remaining_seconds / 3600,
+        remaining_seconds / len(pending) if pending else 0.0,
+        progress.elapsed_seconds / 3600,
         progress.target_duration_seconds / 3600,
-        target_per_row,
-        progress.elapsed_seconds / 60,
     )
 
     for record in pending:
@@ -114,9 +117,9 @@ async def _enter_one_record(
 
     scheduled_break = scheduler.break_after(record.index)
     if scheduled_break:
-        break_start = time.monotonic()
-        await scheduler.take_break(human, scheduled_break.duration_seconds)
-        break_seconds = time.monotonic() - break_start
+        break_seconds = await scheduler.take_break(
+            human, scheduled_break.duration_seconds
+        )
         progress.log_interruption("scheduled_break", break_seconds, detail="planned")
         store.save(progress)
         logger.info(

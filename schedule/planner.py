@@ -21,6 +21,8 @@ _SELECT_FIELD_SECONDS = 2.0
 _PRE_SUBMIT_SECONDS = 2.0
 _MIN_PACE = 0.30
 _MAX_PACE = 1.15
+# NexusWF clocks out after prolonged inactivity; never rest longer than this.
+MAX_BREAK_SECONDS = 180
 
 
 @dataclass(frozen=True)
@@ -29,19 +31,23 @@ class PlannedBreak:
     duration_seconds: float
 
 
+def clamp_break_seconds(duration_seconds: float) -> float:
+    return min(duration_seconds, MAX_BREAK_SECONDS)
+
+
 def plan_breaks(total_records: int, target_seconds: float, seed: int) -> list[PlannedBreak]:
-    """Reserve a slice of the target duration for a handful of spread-out breaks."""
+    """Reserve spread-out rest periods; each pause is capped to avoid clock-out."""
     rng = random.Random(seed)
-    count = rng.randint(3, 5)
+    count = rng.randint(5, 8)
     break_total = target_seconds * rng.uniform(0.10, 0.15)
-    each = break_total / count
+    raw_each = break_total / count
     points = sorted(
         {max(0, min(total_records - 1, int(total_records * (i + 1) / (count + 1)) - 1)) for i in range(count)}
     )
     return [
         PlannedBreak(
             after_index=point,
-            duration_seconds=each * rng.uniform(0.85, 1.15),
+            duration_seconds=clamp_break_seconds(raw_each * rng.uniform(0.85, 1.15)),
         )
         for point in points
     ]
@@ -95,7 +101,7 @@ class EntryScheduler:
 
     def _future_break_seconds(self) -> float:
         return sum(
-            break_.duration_seconds
+            clamp_break_seconds(break_.duration_seconds)
             for break_ in self.planned_breaks
             if break_.after_index >= self.completed_count
         )
@@ -152,15 +158,24 @@ class EntryScheduler:
 
         return time.monotonic() - padding_start
 
-    async def take_break(self, human: HumanActor, duration_seconds: float) -> None:
-        logger.info("Taking a scheduled break (%.0f seconds)", duration_seconds)
-        remaining = duration_seconds
+    async def take_break(self, human: HumanActor, duration_seconds: float) -> float:
+        """Pause up to MAX_BREAK_SECONDS; returns actual seconds rested."""
+        duration = clamp_break_seconds(duration_seconds)
+        if duration_seconds > MAX_BREAK_SECONDS:
+            logger.info(
+                "Capping break from %.0fs to %.0fs (inactivity clock-out limit)",
+                duration_seconds,
+                duration,
+            )
+        logger.info("Taking a scheduled break (%.0f seconds)", duration)
+        remaining = duration
         while remaining > 1:
             chunk = min(remaining, random.uniform(20, 45))
             await human.think(chunk * 950, chunk * 1000)
             remaining -= chunk
             if remaining > 30 and random.random() < 0.15:
                 await human.scroll()
+        return duration
 
     async def simulate_connection_blip(self) -> float:
         delay = random.uniform(20, 60)

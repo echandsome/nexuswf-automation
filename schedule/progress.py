@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from schedule.planner import PlannedBreak, plan_breaks, schedule_seed
+from schedule.planner import PlannedBreak, clamp_break_seconds, plan_breaks, schedule_seed
 
 logger = logging.getLogger(__name__)
 
@@ -127,20 +127,62 @@ class ProgressStore:
         seed = schedule_seed(task_key, target_duration_seconds)
 
         if existing and existing.task_file == task_key:
-            if not existing.planned_breaks:
+            dirty = False
+
+            # Apply a newly requested target duration to the in-flight run.
+            if abs(existing.target_duration_seconds - target_duration_seconds) > 1.0:
+                logger.info(
+                    "Target duration changed: %.2f h -> %.2f h",
+                    existing.target_duration_seconds / 3600,
+                    target_duration_seconds / 3600,
+                )
+                existing.target_duration_seconds = target_duration_seconds
+                existing.planned_breaks = plan_breaks(
+                    total_records, target_duration_seconds, seed
+                )
+                dirty = True
+            elif not existing.planned_breaks:
                 existing.planned_breaks = plan_breaks(
                     total_records, existing.target_duration_seconds, seed
                 )
+                dirty = True
+            else:
+                clamped = [
+                    PlannedBreak(
+                        after_index=b.after_index,
+                        duration_seconds=clamp_break_seconds(b.duration_seconds),
+                    )
+                    for b in existing.planned_breaks
+                ]
+                if clamped != existing.planned_breaks:
+                    existing.planned_breaks = clamped
+                    dirty = True
+
+            if dirty:
                 self.save(existing)
+
+            remaining_records = max(0, total_records - existing.completed_count)
+            future_breaks = sum(
+                clamp_break_seconds(b.duration_seconds)
+                for b in existing.planned_breaks
+                if b.after_index >= existing.completed_count
+            )
+            remaining_seconds = max(
+                0.0, existing.target_duration_seconds - existing.elapsed_seconds
+            )
+            remaining_work = max(0.0, remaining_seconds - future_breaks)
+            remaining_per_row = (
+                remaining_work / remaining_records if remaining_records else 0.0
+            )
             logger.info(
-                "Resuming entry progress: %d completed, %.0fs / %.0fs elapsed "
-                "(avg %.1fs/row, target avg %.1fs/row)",
+                "Resuming: %d done in %.2f h (avg %.1fs/row); "
+                "%d left in %.2f h -> %.1fs/row",
                 existing.completed_count,
-                existing.elapsed_seconds,
-                existing.target_duration_seconds,
+                existing.elapsed_seconds / 3600,
                 existing.entry_seconds / max(existing.completed_count, 1),
-                (existing.target_duration_seconds - sum(b.duration_seconds for b in existing.planned_breaks))
-                / total_records,
+                remaining_records,
+                remaining_seconds / 3600,
+                remaining_per_row,
             )
             return existing
 
